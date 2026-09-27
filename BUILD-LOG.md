@@ -11,19 +11,6 @@ gives nothing away.
 
 ---
 
-<!-- EXAMPLE — delete this block, keep the shape.
-
-## 2026-03-04 · Phase 0 — orientation
-
-Expected the unknown-permission test to fail on my validation code.
-Observed: it passed, with foreign_keys ON, and *also* passed with the pragma removed — so the
-check was never running, and the "pass" was the schema loading fine while enforcing nothing.
-Changed: moved `foreign_keys = ON` to connection open and re-ran; now it raises
-`FOREIGN KEY constraint failed` as the README said it would.
-Note: this is the failure mode where a passing test is worse than a failing one.
-
--->
-
 ## Phase 0 — orientation
 
 _Installed, reset the database, read the documents, ran the suites against the untouched skeleton.
@@ -277,6 +264,21 @@ stop vs terminate, cross-org 404, removal cascade, audit trigger refuses DELETE)
 
 _What did you decide counts as an auditable event, and what pushed you to that line?_
 
+
+### 2026-09-27 · audit (done inside Phases 3 and 5)
+
+Pulled forward: I wrote `audit.js` before the first mutating route, so no route existed
+unaudited. The line I drew: every **mutation** writes exactly one row. `auditDenials()` runs the
+change and the allow row in one transaction, so a rollback takes the row with it. Every **refusal
+a caller could see** (403, 409) writes a deny row with `reason_code` after the rollback. Reads
+(`quiet: true`) record denials only; a successful list changed nothing. 404s are not recorded:
+writing "someone probed device X" into the org they addressed would confirm X is there.
+
+The append-only guarantee is the schema's triggers, not my code. A scratch check ran
+`DELETE FROM audit_events` and got `audit_events is append-only`. The read side
+(`routes/audit.js`) rejects `limit` outside 1..500 and non-integer or negative offsets with 400,
+which covers the six pagination cases in `check-api.js`.
+
 ## Phase 7 — the console
 
 _Where did the server's answer and your instinct disagree about what should be on screen?_
@@ -354,7 +356,42 @@ held by `one_live_invite_per_email`.
 
 All suites green after the changes: 43 / 35 / 18 / 66 / 25.
 
+### 2026-09-27 · speed
+
+Counted statements, not guessed. I wrapped `db.prepare` in a scratch script so every
+`get/all/run` increments a counter, then called `resolveDevices` directly:
+
+| | devices | grants for user | queries / call | time / call |
+|---|---|---|---|---|
+| fixture | 5 | 2 | 4 | 0.09 ms |
+| scaled (+1000 devices, +200 device grants) | 1,005 | 202 | 4 | 2.53 ms |
+
+The org-level `resolve` is also 4 queries at both sizes. So the list endpoint is one batched
+resolve, and the count does not grow with rows. Over HTTP (p50 of 20, scaled DB): `/auth/me`
+0.3 ms, switch org 0.4 ms, `/sessions` 0.3 ms, `/devices` with 1,005 rows 10.4 ms. Login is
+19.6 ms, almost all scrypt, which is deliberate.
+
+What I didn't fix: at 1,005 rows `/devices` is 1.5 MB, because every row carries all 20
+resolved permissions (the contract's shape). Fine at the fixture scale the brief targets. Paging
+is the lever if it isn't. No cache was added, because there is nothing slow to cache (DECISIONS:
+"Resolve fresh every request").
+
 ## Open threads
 
 _Things you know are wrong, unfinished, or that you would do differently with another day. Listing
 these honestly is worth more than pretending they do not exist — we will find them anyway._
+
+- **Same-browser, two-tab reload race.** Refresh-token replay revokes the whole family. Two tabs
+  of one browser reloading at the same instant send the same cookie twice, and both get logged
+  out. `api.js` makes refreshes single-flight within one page, but not across tabs. The fix would
+  be a short grace window where the just-rotated token returns the same successor; I held off
+  because it weakens replay detection.
+- **A reload lands in the earliest-joined org**, not the one you were in. The org isn't
+  persisted anywhere client-side on purpose (no web storage). It could go in the URL.
+- **Suspended-member refusals from `context.js` aren't audited.** The guard runs before the route
+  and has no request id. The engine-level denials still are.
+- **The console's error banner shows the server's message verbatim.** It's good for honesty,
+  but some messages are terse (e.g. `missing device:control on this device`).
+- **No automated test suite of my own is committed.** The scratch scripts that found the M3–M8
+  issues (49 + 44 + 23 + 17 checks and the fuzzer) lived outside the repo. With another day
+  they'd go into `scripts/` next to the shipped ones.
