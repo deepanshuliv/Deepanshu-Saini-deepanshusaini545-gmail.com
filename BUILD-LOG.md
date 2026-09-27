@@ -109,6 +109,52 @@ isn't returned to the caller, because telling an attacker "right signature, wron
 _This is where most people's first model is wrong. Write down the model you started with, the
 observation that broke it, and the model you moved to. Be specific about the observation._
 
+### 2026-09-27 · the engine
+
+Model: no membership → `not_a_member`; not active → `suspended`; any applicable deny →
+`explicit_deny`; role baseline → allow `role:<key>`; applicable allow grant → allow
+`grant:<id>`; else `implicit`. The baseline is checked before allow grants, so when both apply
+the source is the role, the more stable explanation.
+
+Wildcards match through `permissions.resource` (`device:*` ↔ `resource = 'device'`), not a string
+prefix, so the catalogue decides what `user:*` covers. `device:* does NOT allow audit:read` passes.
+
+The part the docs leave open is the org-level view. "Union across devices" I built as: org-wide
+grants are the floor. An `implicit` deny there becomes allow if a device-scoped allow survives at
+its own device. An org-wide deny can't be overturned, because the same deny applies at every
+device. Consequence: the acme viewer's `session:start` grant on one device makes `session:start`
+allow at org level, so the "start session" entry exists for them. A device-scoped deny doesn't
+remove a role permission at org level.
+
+Found while writing the grants query: a device-scoped grant on a device that was later
+transferred keeps its old `org_id`. A plain union would count it in the old org. The query joins
+`devices` and requires `d.org_id = g.org_id AND d.deleted_at IS NULL`.
+
+`check-permissions.js` 35/35 and `npm run personalisation` 18/18, both on the first run (`65ac8e0`).
+Every call is 3–4 queries whatever the grant count; `resolveDevices` shares them across N devices.
+
+### 2026-09-27 · context and auth routes
+
+`check-api.js` expects Dana and Sam to land in Acme on login, with no `orgId` sent. Nothing in
+the docs says which org a login picks. I chose the earliest `joined_at` active membership, which
+matches the fixture without naming a seed id.
+
+`refresh_tokens` has no `org_id`, so a refresh can't restore the org it was issued for. The
+client sends `orgId` with the refresh, and the server falls back to earliest-joined.
+
+Refresh rotation: `UPDATE ... SET revoked_at WHERE id = ? AND revoked_at IS NULL`. The statement
+that changes the row wins. If a token is presented again after rotation, `changes === 0` and
+`revoked_at` is already set, so the whole `family_id` is revoked. Checked by hand: rotate → 200,
+replay the old token → 401, and the rotated child → 401 too.
+
+Login: an unknown email runs scrypt against a dummy hash, so it costs the same as a wrong
+password. The response bodies are byte-identical.
+
+The first `check-api.js` run after this commit: all auth checks pass. `no token -> 401` still
+fails with 404, because `/orgs/:org/devices` isn't registered and the router 404s before
+authentication runs. That's expected until M4, and it means "unknown route" and "unauthenticated"
+aren't distinguishable yet.
+
 ## Phase 3 — orgs, members, invites
 
 _Anything you had to work out that no document states. Invite lifecycle states are a common

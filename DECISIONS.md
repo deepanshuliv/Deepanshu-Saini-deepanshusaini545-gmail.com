@@ -63,3 +63,12 @@ cannot tell the difference between a decision and an oversight.
 
 What you chose not to build, and the reason. A scope cut with a stated reason is a senior
 judgement. An unmentioned gap is a gap.
+
+## Tools used
+
+- **Claude Code (Anthropic's AI coding assistant)** was used throughout to draft code, tests and
+  log entries. I directed the work milestone by milestone, reviewed each change, ran the suites
+  myself, and edited the write-up. No code was taken from the reference implementation or any
+  public solution; the organiser-only reference tree was removed from this repository unread
+  (`23fd29d`).
+- No runtime libraries beyond those the starter ships (`better-sqlite3`, React, Vite, Playwright).
