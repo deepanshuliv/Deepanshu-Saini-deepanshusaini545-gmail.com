@@ -196,8 +196,10 @@ export function assertCanStartSession(db, ctx, mode, deviceId) {
   if (!modePermission) throw badRequest(`mode must be one of ${Object.keys(MODE_PERMISSION).join(', ')}`);
 
   const { permissions } = resolve(db, { userId: ctx.userId, orgId: ctx.orgId, deviceId });
-  if (permissions['session:start']?.effect !== 'allow') {
-    throw forbidden('missing session:start', 'missing_permission');
+  const start = permissions['session:start'];
+  if (start?.effect !== 'allow') {
+    // A suspended caller is told so; otherwise the reason names WHICH check failed.
+    throw forbidden('missing session:start', start?.reason === 'suspended' ? 'suspended' : 'missing_permission');
   }
   if (permissions[modePermission]?.effect !== 'allow') {
     throw forbidden(`missing ${modePermission} on this device`, 'missing_device_permission');

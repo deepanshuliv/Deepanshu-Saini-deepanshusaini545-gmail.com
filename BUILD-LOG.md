@@ -243,6 +243,36 @@ transfer, effective per org). Earlier suites still green.
 _Two permissions, one device. What did you have to resolve, and in what order, to keep the two
 failure reasons distinguishable?_
 
+### 2026-09-27 · sessions
+
+One `resolve()` at the device, then two checks in a fixed order: `session:start` first →
+`missing_permission`, then the mode permission → `missing_device_permission`. The order is the
+point. The viewer on qa-android-01 lacks **both**, and the test expects `missing_permission`
+("you can't open sessions at all") rather than the device-specific reason. The only exception is
+suspension: a suspended caller gets `suspended`, not "missing".
+
+Exclusivity is the partial unique index. The insert is attempted, and a
+`SQLITE_CONSTRAINT_UNIQUE` is mapped to `409 DEVICE_BUSY`, naming the holder's session id in the
+message. Two parallel exclusive starts (control + terminal on qa-android-01, via `Promise.all`)
+gave exactly one 201 and one 409.
+
+**TTL was a trap I only saw by writing it.** An active session past its `expires_at` still sits
+in the partial unique index (`WHERE state = 'active'`), so an expired control session would keep
+the device busy forever. `expireSessions(org)` runs before every session read or write and ends
+those rows with `session_expired`. I tested it by moving `expires_at` into the past directly in
+SQLite: the session then reads `ended/session_expired`, and a new control session on that device → 201.
+
+Stopping one session: my first draft reused `endActiveSessions` with a user+device filter, which
+would also have ended that user's other sessions on the same device (a view and a control can
+coexist). I changed it to a single-row `UPDATE ... WHERE id = ?`.
+
+Grandfathering holds without extra code: nothing in role or grant changes touches `sessions`, so
+the live control session stays `active` after Sam's demotion (check-api §7.1). Suspend and
+removal end sessions through `endActiveSessions`.
+
+`check-api.js` **66/66 on the first full run**. Extra scripted checks 23/23 (concurrency, TTL,
+stop vs terminate, cross-org 404, removal cascade, audit trigger refuses DELETE).
+
 ## Phase 6 — audit
 
 _What did you decide counts as an auditable event, and what pushed you to that line?_
