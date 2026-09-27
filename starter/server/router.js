@@ -27,7 +27,14 @@ export function createRouter() {
         const seg = r.segments[i];
         const param = PARAM.exec(seg);
         if (param) {
-          params[param[1]] = decodeURIComponent(parts[i]);
+          // A malformed escape (e.g. '%E0%A4%A') is a path that matches nothing — a 404,
+          // not a URIError that surfaces as a 500.
+          const value = safeDecode(parts[i]);
+          if (value === null) {
+            ok = false;
+            break;
+          }
+          params[param[1]] = value;
         } else if (seg !== parts[i]) {
           ok = false;
           break;
@@ -48,6 +55,14 @@ export function createRouter() {
     match,
     get routes() { return routes; },
   };
+}
+
+function safeDecode(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
 }
 
 function split(path) {

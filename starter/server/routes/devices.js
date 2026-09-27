@@ -166,9 +166,11 @@ export function registerDeviceRoutes(router, { db }) {
       }
       if (startsAt !== null && expiresAt !== null && expiresAt <= startsAt) throw badRequest('expiresAt must be after startsAt');
 
+      if (typeof userId !== 'string') throw badRequest('userId is required');
+      if (deviceId !== null && typeof deviceId !== 'string') throw badRequest('deviceId must be a string or null');
       const target = db
         .prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ? AND status = 'active'`)
-        .get(params.org, userId ?? '');
+        .get(params.org, userId);
       if (!target) throw notFound('no such member');
       if (deviceId !== null) findDevice(db, params.org, deviceId);
       if (userId === ctx.userId) throw forbidden('you cannot grant permissions to yourself', 'self_grant');

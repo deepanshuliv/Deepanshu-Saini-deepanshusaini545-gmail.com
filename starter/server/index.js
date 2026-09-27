@@ -77,7 +77,13 @@ const MIME = {
 
 async function serveStatic(req, res, url) {
   // normalize() collapses '..' so a crafted path cannot escape dist/.
-  const rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+  let decoded;
+  try {
+    decoded = decodeURIComponent(url.pathname);
+  } catch {
+    decoded = '/'; // a malformed escape can't name a file; fall through to the SPA
+  }
+  const rel = normalize(decoded).replace(/^(\.\.[/\\])+/, '');
   let file = join(DIST, rel);
 
   try {

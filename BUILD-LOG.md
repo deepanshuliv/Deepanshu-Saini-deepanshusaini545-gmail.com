@@ -323,6 +323,37 @@ and no Audit card; Globex is amber with the Audit card and View only.
 _What did you measure, what did you fix, and what did you deliberately leave alone? Anything you
 chose not to build belongs here with its reason._
 
+### 2026-09-27 · hardening
+
+**Fuzzing found a 500 I would not have guessed.** 3,979 requests: 36 routes × 22 junk bodies
+(objects where strings go, arrays, wrong types, 5,000-char names, garbage timestamps) × 5 tokens
+(none, valid, garbage, `a.b.c`, bit-flipped), plus malformed JSON on every write route. The
+junk bodies produced no 5xx. The one route that did was `GET /invites/%E0%A4%A`: 110 × 500. The
+given `router.js` calls `decodeURIComponent` on path params, and a malformed escape throws
+`URIError`. It now counts as "no match" → 404, and `serveStatic` falls back to the SPA for the
+same input. Rerun: 0 × 5xx, 0 `unhandled` lines in the server log.
+
+**Found by probing, before the fuzz:** better-sqlite3 binds `undefined` as NULL, but throws
+`RangeError: Too few parameter values` for an object. So `{"userId": {}}` on `POST /grants` and
+`{"deviceId": {}}` on `POST /sessions` were 500s. Ids are now type-checked (400).
+
+**Suspension on ungated routes.** Some org routes have no permission check at all: your own
+session (`GET`/`DELETE /sessions/:id`), leaving (`DELETE members/me`), your own `effective`. The
+engine's empty set never gets consulted there, so a suspended member could still use them. The
+API can't mint such a token (suspend bumps `pv`, login and switch skip suspended orgs), but
+anyone holding the signing secret, like a test harness, can. With a hand-signed token at the
+current `pv`: before the fix these answered 200; now all four → `403 suspended`. `/auth/me` still
+answers (status `suspended`, all-deny set) so the console can say why. The guard lives once in
+`context.js` instead of in each route.
+
+A removed membership with a correctly signed, current-`pv` token → 401 (the token speaks for nobody).
+
+Also: `Authorization: bearer …` (lowercase) and extra whitespace are accepted per RFC 7235;
+`Basic …` and two tokens → 401. Three parallel invite creates for one email → one 201, two 409,
+held by `one_live_invite_per_email`.
+
+All suites green after the changes: 43 / 35 / 18 / 66 / 25.
+
 ## Open threads
 
 _Things you know are wrong, unfinished, or that you would do differently with another day. Listing

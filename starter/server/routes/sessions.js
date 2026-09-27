@@ -34,7 +34,8 @@ export function registerSessionRoutes(router, { db }) {
     const { deviceId, mode } = ctx.body;
     if (!(mode in MODE_PERMISSION)) throw badRequest(`mode must be one of ${Object.keys(MODE_PERMISSION).join(', ')}`);
     expireSessions(db, params.org);
-    const device = db.prepare('SELECT id FROM devices WHERE id = ? AND org_id = ? AND deleted_at IS NULL').get(deviceId ?? '', params.org);
+    if (typeof deviceId !== 'string') throw badRequest('deviceId is required');
+    const device = db.prepare('SELECT id FROM devices WHERE id = ? AND org_id = ? AND deleted_at IS NULL').get(deviceId, params.org);
     if (!device) throw notFound();
 
     const id = newId('ses');
