@@ -1,29 +1,46 @@
 // Per-request context: turn a bearer token into an authenticated caller.
 //
-// YOURS TO WRITE. This file ships as a stub so the server boots and every
-// authenticated request fails loudly instead of appearing to work.
+// The token's `org` claim is the ONLY org the caller may address. A path that names any
+// other org is invisible — 404, before any permission is looked at. Isolation is
+// structural: the caller cannot name another org, rather than being filtered afterwards.
 //
-// What it has to do (BRIEF.md §3, PERMISSIONS.md §6):
-//   - read the bearer token, verify it with verifyAccessToken() from ./auth.js
-//   - look the membership up and refuse a token whose org or membership is gone
-//   - THE TOKEN'S org CLAIM IS THE ONLY ORG THE CALLER MAY ADDRESS. A request that
-//     names a different org is INVISIBLE — 404, never 403. Isolation is structural:
-//     the caller cannot name another org, rather than being filtered afterwards.
-//   - check freshness against memberships.perm_version (AUTH-DATA-MODEL.md §3), so a
-//     role or grant change takes effect on the NEXT request, not at token expiry
-//   - throw through the one error path in ./http.js
-//
-// authenticate(db, secret) returns (req, params) => caller, where caller carries at
-// least { userId, orgId, role, membership, claims }.
+// Order matters and is: signature/claims -> membership -> freshness -> org in the path.
+// A suspended membership passes through with its status intact; the engine resolves it
+// to an empty set (reason `suspended`), so routes answer 403 rather than 401.
 
-const todo = () =>
-  Object.assign(
-    new Error('TODO: server/context.js — authenticate() is yours to write (BRIEF.md §3).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+import { verifyAccessToken, assertFresh } from './auth.js';
+import { unauthenticated, notFound } from './http.js';
+
+const BEARER = /^Bearer ([^\s]+)$/;
 
 export function authenticate(db, secret) {
+  const findMembership = db.prepare(
+    `SELECT m.id, m.org_id, m.user_id, m.role, m.status, m.perm_version
+       FROM memberships m
+       JOIN organizations o ON o.id = m.org_id AND o.deleted_at IS NULL
+      WHERE m.user_id = ? AND m.org_id = ?`
+  );
+
   return function buildContext(req, params) {
-    throw todo();
+    const match = BEARER.exec(req.headers.authorization ?? '');
+    if (!match) throw unauthenticated('missing bearer token');
+    const claims = verifyAccessToken(match[1], secret);
+
+    // A user with no active org (removed everywhere, or brand new) holds an org-less
+    // token: it can list and create orgs, and address nothing else.
+    if (claims.org === null) {
+      if (params.org !== undefined) throw notFound();
+      return { userId: claims.sub, orgId: null, role: null, membership: null, claims };
+    }
+
+    const membership = findMembership.get(claims.sub, claims.org);
+    if (!membership || membership.status === 'removed' || membership.status === 'invited') {
+      throw unauthenticated('not a member of this org');
+    }
+    assertFresh(claims, membership);
+
+    if (params.org !== undefined && params.org !== claims.org) throw notFound();
+
+    return { userId: claims.sub, orgId: claims.org, role: membership.role, membership, claims };
   };
 }
