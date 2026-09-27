@@ -204,6 +204,40 @@ and `invite.create|deny|insufficient_rank`.
 _What happens at the boundary where two grants disagree, or where a grant's scope and the
 question's scope differ? Say what you predicted and what you got._
 
+### 2026-09-27 · devices, grants, effective
+
+**Scope mismatch I nearly shipped.** `assertCan(db, ctx, 'device:provision')` with no device
+resolves the org-level **union**. So a device-scoped `allow device:provision` on one box would
+let the holder create new devices org-wide. The union is right for nav gating and wrong for
+authorizing an org-wide action. I added `assertCanOrgWide` (org-wide grants only) and use it for
+provisioning and for the destination side of a transfer. `assertMayGrant` already used org scope
+for org-wide grants, for the same reason.
+
+**Unknown permission, left to the FK.** I predicted `device:teleport` would pass the laundering
+check vacuously, because it expands to no catalogue rows, and then fail at insert. It does:
+`SQLITE_CONSTRAINT_FOREIGNKEY` → `400 unknown_permission`, and the grant row inserted just
+before it rolls back with the transaction (grant count still 3). `INSERT OR IGNORE` folds
+duplicate permissions in one request (`['device:terminal','device:terminal']` → one row). I
+checked that OR IGNORE does not swallow the FK error: it applies to UNIQUE/PK conflicts, not
+foreign keys.
+
+**Grants follow rank rules too.** Not stated for grants in the docs. An admin creating a
+`deny org:delete` on an owner is modifying someone above them, so it goes through the same
+`assertCanModify` as role changes (403).
+
+**Device detail when `device:view` is denied.** The list omits the row. For
+`GET /devices/:id` I followed the three gates in PERMISSIONS.md §5: the device is in your org
+(visible), you lack the permission → 403, not 404.
+
+**Observed:** creating a grant bumps the grantee's `perm_version`, so their existing token
+becomes `TOKEN_STALE` on the very next request (`viewer old token stale after grant`). That's the
+"next request reflects the change" guarantee. It also means the console must refresh and retry
+on `TOKEN_STALE` rather than log the user out.
+
+Transfer revokes the old org's grants on the device and ends its sessions
+(`device_transferred`). Scripted check 44/44 (fixture rows, validation matrix, laundering,
+transfer, effective per org). Earlier suites still green.
+
 ## Phase 5 — sessions
 
 _Two permissions, one device. What did you have to resolve, and in what order, to keep the two

@@ -163,6 +163,17 @@ export function assertCan(db, ctx, permission, deviceId) {
   return e;
 }
 
+// For actions that have no device yet (provisioning one): the org scope alone. The
+// union would let a device-scoped grant on one device authorize an org-wide action.
+export function assertCanOrgWide(db, ctx, permission) {
+  const inputs = loadInputs(db, ctx.userId, ctx.orgId, new Date());
+  const blocked = blockedReason(inputs);
+  if (blocked) throw forbidden(`missing ${permission}`, blocked);
+  const e = permissionsOrgOnly(inputs)[permission] ?? entry('deny', null, 'implicit');
+  if (e.effect !== 'allow') throw forbidden(`missing ${permission}`, refusalReason(e));
+  return e;
+}
+
 // No privilege laundering (D9): every permission a pattern expands to must be held by
 // the caller at the scope being granted. An org-wide grant is checked at org scope
 // only — holding something on one device does not let you hand it out org-wide.
