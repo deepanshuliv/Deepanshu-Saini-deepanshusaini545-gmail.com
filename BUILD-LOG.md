@@ -281,6 +281,43 @@ _What did you decide counts as an auditable event, and what pushed you to that l
 
 _Where did the server's answer and your instinct disagree about what should be on screen?_
 
+### 2026-09-27 · the console
+
+`npx playwright test` **25/25 on the first run** (after `npm run build`: the Playwright web server
+runs in production mode and serves `dist/`, so a stale or missing build fails every test).
+
+**Where my instinct and the server disagreed:** Sam as auditor in Globex gets a **View** button
+on every row, because `start-view` is governed by `device:view` (UI-INVENTORY §3). But he has no
+`session:start`, so clicking it gets `403 missing_permission`. My instinct was to hide the button
+unless both permissions hold, which means computing the compound rule in React. That's exactly
+the re-derivation the inventory forbids. I left it as specified. The refusal shows on screen with
+its code and reason (the `ErrorNote` banner), and a Sessions-card user never sees a "Start"
+without `session:start`.
+
+**Refresh replay vs. the client.** The server revokes a whole refresh family when a rotated token
+is replayed. Two refreshes in flight from one page (a React StrictMode double effect, or a stale
+retry racing a reload) would present the same cookie twice and log the user out. `api.js` keeps
+one in-flight refresh promise; StrictMode isn't used. Two tabs in the *same* browser reloading
+at the same instant can still trip it (see Open threads).
+
+**TOKEN_STALE is routine, not an error.** A grant or role change bumps `perm_version`, so the next
+call from the affected user is a 401. `api()` refreshes once and retries. If the refresh lands in
+a *different* org (the membership was suspended or removed), it raises `ORG_CHANGED`, and the
+keyed `Shell` remounts in the new org rather than calling the old org's URLs with the new token.
+
+**Isolation in the DOM** comes from `<Shell key={orgId}>`: switching orgs unmounts every view, so
+no state from the previous org survives. The "no other org's content" test found nothing.
+
+**Nothing in the console knows a role.** The roles for pickers come from a new `GET /v1/roles`
+(read from the table, so `reviewer` appears). The grant form's permission checkboxes are the keys
+of the caller's own resolved set, so `device:reboot` appears in the form without being named in `web/`.
+
+Joining through an invite goes to the sign-in form, not straight in (the test expects
+`login-form`). The accept response's token is deliberately not adopted.
+
+Screenshots of Sam in both orgs confirm the swap visually: Acme is cobalt with Control present
+and no Audit card; Globex is amber with the Audit card and View only.
+
 ## Phase 8 — hardening
 
 _What did you measure, what did you fix, and what did you deliberately leave alone? Anything you

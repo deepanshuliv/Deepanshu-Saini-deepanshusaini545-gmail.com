@@ -66,6 +66,12 @@ export function registerOrgRoutes(router, { db }) {
 
   router.get('/v1/orgs', (ctx, _p, res) => send(res, 200, { orgs: activeOrgs(db, ctx.userId) }));
 
+  // The role catalogue, for pickers. Read from the table: the console never lists roles
+  // itself, and a personalised database has roles no document mentions.
+  router.get('/v1/roles', (_ctx, _p, res) =>
+    send(res, 200, { roles: db.prepare('SELECT key, label FROM roles ORDER BY rank DESC').all() })
+  );
+
   router.post('/v1/orgs', (ctx, _p, res) => {
     const name = orgName(ctx.body.name);
     assertNameFree(db, ctx.userId, name);
