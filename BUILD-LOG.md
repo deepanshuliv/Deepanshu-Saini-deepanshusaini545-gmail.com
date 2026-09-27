@@ -160,6 +160,45 @@ aren't distinguishable yet.
 _Anything you had to work out that no document states. Invite lifecycle states are a common
 source of this._
 
+### 2026-09-27 · orgs, members, invites
+
+**Docs vs test on equal rank.** PERMISSIONS.md §6 says modifying a user of equal role is `403`.
+`check-api.js` has `demoting a NON-last owner is allowed`, which is Dana (owner) demoting
+owner@acme (owner). Both can't hold for owners. I built "strictly lower, except owner-on-owner"
+(`assertCanModify` in `lifecycle.js`). An admin→admin change is still 403. Otherwise a
+multi-owner org could never hand ownership around, and LAST_OWNER would have nothing to protect.
+
+**Invite index gap.** `one_live_invite_per_email` only excludes `accepted_at` and `revoked_at`
+rows. An invite that simply **expired** still counts as live, so re-inviting that email a week
+later would hit a UNIQUE violation. Create now retires lapsed invites (`revoked_at = now`) in the
+same transaction, before inserting.
+
+**Double accept.** The partial index doesn't stop two accepts of one token; both would update
+the same row. The arbiter is the accept itself:
+`UPDATE invites SET accepted_at WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`.
+Tested with two parallel accepts via `Promise.all`: one 200, one 409.
+
+**Accepting as an existing user.** The docs say existing users get "attached, never
+duplicated", but not how they prove who they are. With only the token, anyone holding the link
+could attach someone else's account to an org. I now require that account's password: wrong
+password → 401, right one → attached (`orgs.length` 1 → 2, same user id).
+
+**Rehire.** A removed membership keeps its row, so on re-accept the row is reactivated, not
+inserted (`UNIQUE (org_id, user_id)`). The trap: the user's old grants would come back with it.
+Removal now revokes that user's grants in the org.
+
+**Suspension and login.** A suspended membership is excluded from `orgs`, so Sam, suspended in
+Acme, lands in Globex on the next login. His old Acme token → `401 TOKEN_STALE`, because suspend
+bumps `perm_version`.
+
+Audit was pulled forward from Phase 6. `auditDenials()` wraps each mutation in one transaction
+and writes the allow row inside it. A 403 or 409 writes a deny row with the reason after the
+rollback. 404s are not recorded: the caller never learned the target exists.
+
+Scripted check (scratch, not committed): 49/49 across orgs, members, suspend/reinstate, invites,
+revoke, concurrent accept and rehire. The audit table showed e.g. `member.role|deny|SELF_ROLE_CHANGE`
+and `invite.create|deny|insufficient_rank`.
+
 ## Phase 4 — devices and grants
 
 _What happens at the boundary where two grants disagree, or where a grant's scope and the
