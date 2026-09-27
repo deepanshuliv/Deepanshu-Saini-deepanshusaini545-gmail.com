@@ -66,6 +66,44 @@ don't have.
 _What did you expect each failure mode to look like before you ran it? Which one behaved
 differently from your expectation, and what did that tell you?_
 
+### 2026-09-27 · predictions, written before implementing
+
+- Malformed shapes (null, 1/2/4 segments): caught by the split. No surprises expected.
+- `header is not JSON` / `payload is not JSON`: `JSON.parse` throws a `SyntaxError`. If I don't
+  wrap it, the test sees `SyntaxError`, not a 401. So every decode goes through one try/catch.
+- JSON that parses to a non-object (`null`, `"HS256"`, `[]`): I expect `null` to crash with a
+  `TypeError` on `header.alg` unless I check that the value is a plain object first.
+- `signature is not base64url`: I predict `Buffer.from(s, 'base64url')` does **not** throw. Node
+  silently drops invalid characters. So this case has to be caught by the length and compare
+  step, not by the decode.
+- `timingSafeEqual` throws `RangeError` on unequal lengths, which would hit the truncated and
+  empty signature cases. It needs a length guard in front of it.
+- `exp exactly now` must be rejected: the check is `exp <= now`, not `exp < now`.
+
+### 2026-09-27 · result
+
+Checked the two library predictions in isolation first. Both held:
+`Buffer.from('!!!not-base64!!!', 'base64url')` returns 7 bytes and does not throw, and
+`timingSafeEqual` on 32 vs 6 bytes throws `RangeError`.
+
+The first prediction changed the design. If invalid characters are dropped silently, then
+comparing *decoded* signature bytes means more than one string maps to the same signature. I
+tested it: flipping a padding bit in the last character of a real signature decodes to identical
+bytes (`same bytes after decode: true`). A byte comparison would accept that token. So
+`verifyAccessToken` re-encodes the expected HMAC and compares the **encoded strings** in
+constant time, with a length guard in front. The mutated token is rejected with
+`401 UNAUTHENTICATED`. `check-jwt.js` doesn't test this, so the check lives only here.
+
+`decodeObject()` returns null for anything that isn't a plain object: bad base64url, bad JSON,
+`null`, arrays, primitives. That covers the `null.alg` crash I predicted.
+
+Every failure returns the same message ("invalid or expired token"). The reason for a rejection
+isn't returned to the caller, because telling an attacker "right signature, wrong aud" helps them.
+
+`node scripts/check-jwt.js`: **43 passed, 0 failed** on the first run.
+`pv` staleness is deliberately not checked here, because it needs the DB. It belongs in
+`context.js` (M2) via the existing `assertFresh`.
+
 ## Phase 2 — caller context and the resolution engine
 
 _This is where most people's first model is wrong. Write down the model you started with, the

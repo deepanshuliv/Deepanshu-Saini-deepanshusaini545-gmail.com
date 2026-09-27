@@ -71,12 +71,44 @@ export function issueAccessToken({ userId, orgId, role, permVersion }, secret) {
 // `node scripts/check-jwt.js` is the public test suite for this function.
 // ---------------------------------------------------------------------------
 export function verifyAccessToken(token, secret) {
-  // YOURS TO WRITE. Every failure mode listed above must be a 401 UNAUTHENTICATED.
-  // `node scripts/check-jwt.js` is the public suite for this function.
-  throw Object.assign(
-    new Error('TODO: server/auth.js — verifyAccessToken() is yours to write (AUTH-DATA-MODEL.md §10).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+  // One message for every failure: the caller learns "no", not which check tripped.
+  const reject = () => unauthenticated('invalid or expired token');
+
+  if (typeof token !== 'string') throw reject();
+  const parts = token.split('.');
+  if (parts.length !== 3) throw reject();
+  const [h, p, s] = parts;
+
+  const header = decodeObject(h);
+  const claims = decodeObject(p);
+  if (!header || !claims) throw reject();
+
+  // Compare against our constant; the header's alg never chooses the algorithm.
+  if (header.alg !== ALG || header.typ !== 'JWT') throw reject();
+
+  // Compare the encoded strings, not decoded bytes: Buffer's base64url decoder drops
+  // invalid characters silently, so only the canonical encoding may match.
+  const expected = Buffer.from(b64(createHmac('sha256', secret).update(`${h}.${p}`).digest()));
+  const actual = Buffer.from(s);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw reject();
+
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || claims.exp <= now) throw reject();
+  if (claims.iss !== ISS || claims.aud !== AUD) throw reject();
+  if (typeof claims.jti !== 'string' || claims.jti === '') throw reject();
+
+  return claims;
+}
+
+// base64url JSON -> plain object, or null for anything else (bad encoding, bad JSON,
+// null, arrays, primitives).
+function decodeObject(segment) {
+  try {
+    const value = JSON.parse(unb64(segment).toString('utf8'));
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 
